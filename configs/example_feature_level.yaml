@@ -1,0 +1,39 @@
+experiment_name: feature_level_leave_center_out_example
+setting: zero_shot_unseen_center
+random_seed: 13
+
+data:
+  dataset_name: placeholder
+  feature_path: data/features.csv
+  sample_id_column: sample_id
+  center_column: center_id
+  label_column: label
+  feature_columns: auto
+
+split:
+  protocol: leave_one_center_out
+  target_center: C
+  validation_fraction: 0.15
+
+methods:
+  - no_harmonization
+  - combat
+  - coral
+  - mmd
+  - adversarial_domain_adaptation
+  - vae_harmonization
+  - diffusion_harmonization
+  - diffusion_clinical_preserving
+
+metrics:
+  clinical:
+    - auc
+    - balanced_accuracy
+    - calibration_ece
+  harmonization:
+    - site_auc
+    - mmd_rbf
+    - coral_distance
+  preservation:
+    - source_auc_drop
+    - label_association_preserved
