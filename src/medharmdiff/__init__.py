@@ -7,4 +7,6 @@ __all__ = [
     "protocol",
     "synthetic",
     "benchmark",
+    "io",
+    "confounding",
 ]
