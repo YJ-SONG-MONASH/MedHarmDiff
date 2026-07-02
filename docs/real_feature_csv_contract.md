@@ -17,6 +17,11 @@ The current loader expects `center_id`. If a real source uses `domain_id`, the
 converter should either rename it to `center_id` or call the loader with
 `center_column="domain_id"`.
 
+For paper-safe Camelyon17/WILDS-style results, a patient, slide, study, or
+equivalent grouping key is mandatory. Use `patient_or_group_id` by default, or
+configure `--group-column slide_id` only if the exported metadata provides
+slide IDs and no patient ID.
+
 ## Optional Metadata Columns
 
 These fields are allowed and useful for audits, but must not be automatically
@@ -83,6 +88,13 @@ This rule protects against accidental leakage from numeric metadata.
   `target_unlabeled` settings.
 - `split_group` may encode source train/source validation/target test if using
   an official benchmark split.
+- `split_group` values must be documented before a run, for example
+  `train`, `val`/`id_val`, and `test`/`ood_test`. Do not assume WILDS split
+  names without checking the local metadata export.
+- A real benchmark is not paper-safe unless `run_config.json` contains
+  `split_audit`, `paper_safe_split: true`, and empty group-overlap lists.
+- If no grouping key is available, the runner may emit a warning and produce a
+  diagnostic result, but that result must not be described as paper-safe.
 
 ## Minimum Camelyon17-WILDS Feature CSV
 
@@ -117,4 +129,5 @@ label is introduced.
 - Metadata columns are not included in auto feature selection.
 - Patient/slide/study grouping is available before any result is described as
   patient-safe.
+- The benchmark report records the exact split strategy and leakage audit.
 - License and data access terms are recorded outside the CSV.

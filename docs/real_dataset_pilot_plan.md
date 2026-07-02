@@ -60,6 +60,14 @@ pathology encoder. Raw image files and extracted embeddings stay under ignored
   split metadata is available.
 - Secondary: leave-one-hospital-out rotation using hospital/domain ID, with
   patient/slide grouping enforced inside source train/validation splits.
+- Every real benchmark run must write a split audit with train/validation/test
+  row counts, group sets, cross-split group overlaps, warnings, and a
+  `paper_safe_split` flag.
+- A Camelyon17 result is paper-safe only when a patient, slide, or equivalent
+  grouping key is present and no group overlaps across train/validation/test.
+- If official `split_group` metadata is used, document the exact configured
+  train, validation, and target-test split values in the run command and
+  `run_config.json`.
 - Target labels are evaluation-only. Target unlabeled inputs may be used only
   under an explicitly named `target_unlabeled` adaptation setting.
 
@@ -181,6 +189,9 @@ Remaining blockers before a real benchmark run:
 - Confirm the exact WILDS/Camelyon17 metadata fields exposed by the local WILDS
   version or exported CSV.
 - Confirm patient/slide grouping IDs are available and can prevent leakage.
+- Confirm official `split_group` values or choose a group-safe source split
+  strategy before running the benchmark.
 - Generate frozen patch embeddings under ignored `data/`.
 - Run the feature CSV contract validator before any benchmark.
-- Run the existing feature-level benchmark only after the metadata audit passes.
+- Run `scripts/run_camelyon17_feature_benchmark.py` only after the metadata
+  audit passes; it requires group-safe split metadata by default.

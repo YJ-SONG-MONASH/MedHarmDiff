@@ -112,10 +112,17 @@ def validate_real_feature_contract(
             warnings.append("label column contains NaN values")
         elif not set(labels.tolist()).issubset({0, 1, 0.0, 1.0, False, True}):
             warnings.append("labels are not binary 0/1")
-    if "patient_or_group_id" not in df.columns:
-        warnings.append("patient_or_group_id is missing; leakage audit is incomplete")
-    elif df["patient_or_group_id"].isna().any():
-        warnings.append("patient_or_group_id contains missing values")
+    grouping_columns = ["patient_or_group_id", "slide_id"]
+    present_grouping_columns = [column for column in grouping_columns if column in df.columns]
+    has_grouping_key = any(
+        not df[column].isna().any() for column in present_grouping_columns
+    )
+    if not present_grouping_columns:
+        warnings.append("patient_or_group_id or slide_id is missing; leakage audit is incomplete")
+    else:
+        for column in present_grouping_columns:
+            if df[column].isna().any():
+                warnings.append(f"{column} contains missing values")
 
     center_count = 0
     center_counts: dict[str, int] = {}
@@ -146,6 +153,7 @@ def validate_real_feature_contract(
         "feature_columns": [str(column) for column in feature_columns],
         "has_patient_or_group_id": "patient_or_group_id" in df.columns
         and not df["patient_or_group_id"].isna().any(),
+        "has_grouping_key": has_grouping_key,
         "warnings": warnings,
     }
 

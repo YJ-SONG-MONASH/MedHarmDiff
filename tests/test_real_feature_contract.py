@@ -25,6 +25,7 @@ def test_validate_real_feature_contract_reports_counts_and_metadata(tmp_path) ->
     assert summary["feature_columns"] == ["feature_0", "feature_1"]
     assert summary["metadata_columns"] == ["patient_or_group_id", "scanner"]
     assert summary["has_patient_or_group_id"] is True
+    assert summary["has_grouping_key"] is True
     assert summary["label_prevalence_by_center"] == {"A": 0.5, "B": 1.0, "C": 0.0}
     assert summary["warnings"] == []
 
@@ -46,4 +47,24 @@ def test_validate_real_feature_contract_warns_without_patient_group(tmp_path) ->
     assert summary["metadata_columns"] == ["site_id"]
     assert summary["feature_columns"] == ["feature_0"]
     assert summary["has_patient_or_group_id"] is False
+    assert summary["has_grouping_key"] is False
     assert any("patient_or_group_id" in warning for warning in summary["warnings"])
+
+
+def test_validate_real_feature_contract_accepts_slide_id_grouping(tmp_path) -> None:
+    path = tmp_path / "features.csv"
+    pd.DataFrame(
+        {
+            "sample_id": ["s1", "s2", "s3"],
+            "center_id": ["A", "B", "C"],
+            "label": [0, 1, 1],
+            "slide_id": ["slide_a", "slide_b", "slide_c"],
+            "feature_0": [0.1, 0.2, 0.3],
+        }
+    ).to_csv(path, index=False)
+
+    summary = validate_real_feature_contract(path)
+
+    assert summary["has_patient_or_group_id"] is False
+    assert summary["has_grouping_key"] is True
+    assert not any("leakage audit is incomplete" in warning for warning in summary["warnings"])

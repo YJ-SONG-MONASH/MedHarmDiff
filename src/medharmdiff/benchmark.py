@@ -34,6 +34,7 @@ from .latent_diffusion import (
     TimeConditionedRidgeDiffusionHarmonizer,
 )
 from .metrics import binary_classification_metrics, coral_distance, mmd_rbf
+from .splitting import plan_feature_benchmark_split
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,12 @@ class FeatureBenchmarkConfig:
     random_seed: int = 13
     data_source: str = "csv"
     synthetic_params: dict[str, object] = field(default_factory=dict)
+    group_column: str | None = None
+    split_group_column: str | None = None
+    source_train_split_values: list[str] | None = None
+    source_val_split_values: list[str] | None = None
+    target_test_split_values: list[str] | None = None
+    require_group_safe_split: bool = False
 
 
 @dataclass(frozen=True)
@@ -170,8 +177,10 @@ def run_feature_level_benchmark(config: FeatureBenchmarkConfig) -> FeatureBenchm
     config = replace(config, target_center=target_center)
 
     source_df = df[df[config.center_column].astype(str) != target_center].copy()
-    target_df = df[df[config.center_column].astype(str) == target_center].copy()
-    train_df, val_df = _split_source(source_df, config)
+    split_plan = plan_feature_benchmark_split(df, config)
+    train_df = split_plan.train_df
+    val_df = split_plan.val_df
+    target_df = split_plan.test_df
 
     rows = [
         _evaluate_method(method, config, feature_columns, train_df, val_df, target_df)
@@ -203,14 +212,30 @@ def run_feature_level_benchmark(config: FeatureBenchmarkConfig) -> FeatureBenchm
     )
     run_config_path.write_text(
         json.dumps(
-            _json_ready(_run_config_dict(config, df, source_df, feature_columns)),
+            _json_ready(
+                _run_config_dict(
+                    config,
+                    df,
+                    source_df,
+                    feature_columns,
+                    split_plan.audit,
+                )
+            ),
             indent=2,
             sort_keys=True,
         ),
         encoding="utf-8",
     )
     report_path.write_text(
-        _render_report(config, metrics, claim_summary, source_df, df, feature_columns),
+        _render_report(
+            config,
+            metrics,
+            claim_summary,
+            source_df,
+            df,
+            feature_columns,
+            split_plan.audit,
+        ),
         encoding="utf-8",
     )
 
@@ -248,6 +273,29 @@ def config_from_yaml(path: Path | str) -> FeatureBenchmarkConfig:
         random_seed=int(raw.get("random_seed", 13)),
         data_source=str(raw.get("data_source", data.get("data_source", "csv"))),
         synthetic_params=dict(raw.get("synthetic_params", {})),
+        group_column=split.get("group_column", data.get("group_column", raw.get("group_column"))),
+        split_group_column=split.get(
+            "split_group_column",
+            data.get("split_group_column", raw.get("split_group_column")),
+        ),
+        source_train_split_values=_list_or_none(
+            split.get(
+                "source_train_split_values",
+                raw.get("source_train_split_values"),
+            )
+        ),
+        source_val_split_values=_list_or_none(
+            split.get("source_val_split_values", raw.get("source_val_split_values"))
+        ),
+        target_test_split_values=_list_or_none(
+            split.get("target_test_split_values", raw.get("target_test_split_values"))
+        ),
+        require_group_safe_split=bool(
+            split.get(
+                "require_group_safe_split",
+                raw.get("require_group_safe_split", False),
+            )
+        ),
     )
 
 
@@ -485,6 +533,7 @@ def _render_report(
     source_df: pd.DataFrame,
     full_df: pd.DataFrame,
     feature_columns: list[str],
+    split_audit: dict[str, object],
 ) -> str:
     successful = metrics[metrics["status"].isin(["ok", "placeholder"])]
     baselines = successful[~successful["is_diffusion"].astype(bool)]
@@ -541,6 +590,7 @@ def _render_report(
         "status",
     ]
     metrics_csv = metrics[result_columns].to_csv(index=False, lineterminator="\n")
+    split_section = _render_split_audit_section(split_audit)
     return "\n".join(
         [
             "# Feature-Level Harmonization Benchmark",
@@ -560,6 +610,8 @@ def _render_report(
             f"- Label prevalence by center: `{label_prevalence}`",
             f"- Confounding status: `{confounding_audit.confounding_status}`",
             f"- Label/site imbalance score: `{confounding_audit.imbalance_score}`",
+            "",
+            *split_section,
             "",
             "## Results",
             "",
@@ -603,6 +655,34 @@ def _render_report(
             "",
         ]
     )
+
+
+def _render_split_audit_section(split_audit: dict[str, object]) -> list[str]:
+    paper_safe = bool(split_audit.get("paper_safe_split", False))
+    warnings = [str(warning) for warning in split_audit.get("warnings", [])]
+    lines = [
+        "## Split Audit",
+        "",
+        f"- Train rows: `{split_audit.get('train_count', 0)}`",
+        f"- Validation rows: `{split_audit.get('val_count', 0)}`",
+        f"- Test rows: `{split_audit.get('test_count', 0)}`",
+        f"- Paper-safe split: `{paper_safe}`",
+        f"- Train/validation group overlap: `{split_audit.get('group_overlap_train_val', [])}`",
+        f"- Train/test group overlap: `{split_audit.get('group_overlap_train_test', [])}`",
+        f"- Validation/test group overlap: `{split_audit.get('group_overlap_val_test', [])}`",
+    ]
+    if warnings:
+        lines.append(f"- Warnings: `{warnings}`")
+    else:
+        lines.append("- Warnings: `[]`")
+    if not paper_safe:
+        lines.extend(
+            [
+                "",
+                "This run is not paper-safe due to missing or leaking group/split metadata.",
+            ]
+        )
+    return lines
 
 
 def _select_claim_diffusion_row(diffusion_rows: pd.DataFrame) -> pd.Series | None:
@@ -731,6 +811,12 @@ def _normalize_config(config: FeatureBenchmarkConfig) -> FeatureBenchmarkConfig:
         random_seed=config.random_seed,
         data_source=config.data_source,
         synthetic_params=dict(config.synthetic_params),
+        group_column=config.group_column,
+        split_group_column=config.split_group_column,
+        source_train_split_values=config.source_train_split_values,
+        source_val_split_values=config.source_val_split_values,
+        target_test_split_values=config.target_test_split_values,
+        require_group_safe_split=config.require_group_safe_split,
     )
 
 
@@ -739,6 +825,7 @@ def _run_config_dict(
     full_df: pd.DataFrame,
     source_df: pd.DataFrame,
     feature_columns: list[str],
+    split_audit: dict[str, object],
 ) -> dict[str, object]:
     confounding_audit = audit_label_site_confounding(
         full_df,
@@ -762,6 +849,15 @@ def _run_config_dict(
         "random_seed": config.random_seed,
         "data_source": config.data_source,
         "synthetic_params": config.synthetic_params,
+        "group_column": config.group_column,
+        "split_group_column": config.split_group_column,
+        "source_train_split_values": config.source_train_split_values,
+        "source_val_split_values": config.source_val_split_values,
+        "target_test_split_values": config.target_test_split_values,
+        "require_group_safe_split": config.require_group_safe_split,
+        "split_audit": split_audit,
+        "paper_safe_split": bool(split_audit.get("paper_safe_split", False)),
+        "warnings": list(split_audit.get("warnings", [])),
         "sample_count_by_center": _sample_count_by_center(full_df, config),
         "label_prevalence_by_center": _label_prevalence_by_center(full_df, config),
         "confounding_audit": confounding_audit.to_dict(),
@@ -792,3 +888,14 @@ def _json_ready(value: object) -> object:
     if isinstance(value, float) and np.isnan(value):
         return None
     return value
+
+
+def _list_or_none(value: object) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",")]
+    else:
+        items = [str(item).strip() for item in value]
+    resolved = [item for item in items if item]
+    return resolved or None
