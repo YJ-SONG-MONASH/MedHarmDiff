@@ -67,3 +67,54 @@ def test_multiseed_eval_writes_aggregate_artifacts_and_safe_summary(tmp_path) ->
     assert confounded["confounding_invalidations"] >= 1
     assert confounded["claimable_diffusion_win_count"] == 0
     assert "placeholder_not_counted_as_real_diffusion" in report
+
+
+def test_multiseed_eval_accepts_nonlinear_settings_and_reports_diagnostics(
+    tmp_path,
+) -> None:
+    output_dir = tmp_path / "results"
+    command = [
+        sys.executable,
+        "scripts/run_multiseed_latent_diffusion_eval.py",
+        "--output-dir",
+        str(output_dir),
+        "--run-name",
+        "nonlinear_multiseed_test",
+        "--seeds",
+        "13",
+        "--target-centers",
+        "C",
+        "--settings",
+        "nonlinear_shift_low_confounding,mixed_realistic_shift_strong_confounding",
+        "--samples-per-center",
+        "20",
+        "--n-features",
+        "6",
+        "--setting",
+        "target_unlabeled",
+    ]
+
+    subprocess.run(command, check=True, cwd=".", capture_output=True, text=True)
+
+    run_dir = output_dir / "nonlinear_multiseed_test"
+    summary = json.loads((run_dir / "aggregate_summary.json").read_text(encoding="utf-8"))
+    per_run = pd.read_csv(run_dir / "per_run_metrics.csv")
+
+    assert "nonlinear_shift_low_confounding" in summary["settings"]
+    assert "mixed_realistic_shift_strong_confounding" in summary["settings"]
+    assert "statistical_baselines_dominate_all_settings" in summary
+    assert "ridge_denoising_dominates_all_settings" in summary
+    assert "diffusion_v0_has_any_low_confounding_win" in summary
+    assert "nonlinear_settings_create_headroom" in summary
+    assert "setting_diagnostics" in summary
+    assert "center_mean_dominates" in summary["setting_diagnostics"][
+        "nonlinear_shift_low_confounding"
+    ]
+    assert "diffusion_v0_target_margin_win_rate_vs_ridge" in summary[
+        "setting_diagnostics"
+    ]["nonlinear_shift_low_confounding"]
+
+    confounded = summary["settings"]["mixed_realistic_shift_strong_confounding"]
+    assert confounded["confounding_invalidations"] >= 1
+    assert confounded["claimable_diffusion_win_count"] == 0
+    assert not per_run["uses_target_labels"].fillna(False).astype(bool).any()

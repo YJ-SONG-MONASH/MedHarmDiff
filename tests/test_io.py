@@ -136,3 +136,23 @@ def test_load_feature_csv_requires_at_least_three_centers(tmp_path) -> None:
         assert "at least three centers" in str(exc)
     else:
         raise AssertionError("Expected ValueError")
+
+
+def test_load_feature_csv_auto_excludes_oracle_columns(tmp_path) -> None:
+    path = tmp_path / "features.csv"
+    pd.DataFrame(
+        {
+            "sample_id": ["s1", "s2", "s3"],
+            "center_id": ["A", "B", "C"],
+            "label": [0, 1, 0],
+            "feature_0": [1.0, 2.0, 3.0],
+            "feature_1": [3.0, 4.0, 5.0],
+            "oracle_clinical_latent_0": [0.1, 0.2, 0.3],
+            "oracle_site_style_0": [1.1, 1.2, 1.3],
+        }
+    ).to_csv(path, index=False)
+
+    x, _, _, _, feature_columns = load_feature_csv(path, feature_columns="auto")
+
+    assert x.shape == (3, 2)
+    assert feature_columns == ["feature_0", "feature_1"]

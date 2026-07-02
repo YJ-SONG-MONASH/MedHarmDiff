@@ -20,7 +20,10 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from medharmdiff.benchmark import FeatureBenchmarkConfig, run_feature_level_benchmark
-from medharmdiff.synthetic import generate_synthetic_feature_dataset
+from medharmdiff.synthetic import (
+    generate_synthetic_feature_dataset,
+    generate_synthetic_nonlinear_multicenter_features,
+)
 
 
 METHODS = [
@@ -38,19 +41,82 @@ METHODS = [
 
 PRESETS = {
     "strong_shift_low_confounding": {
+        "generator": "additive",
         "site_shift_strength": 2.5,
         "site_label_confounding_strength": 0.05,
         "random_seed_offset": 0,
     },
     "strong_confounding": {
+        "generator": "additive",
         "site_shift_strength": 2.0,
         "site_label_confounding_strength": 1.5,
         "random_seed_offset": 100,
     },
     "weak_site_shift": {
+        "generator": "additive",
         "site_shift_strength": 0.2,
         "site_label_confounding_strength": 0.0,
         "random_seed_offset": 200,
+    },
+    "nonlinear_shift_low_confounding": {
+        "generator": "nonlinear",
+        "additive_shift_strength": 0.25,
+        "covariance_shift_strength": 0.35,
+        "rotation_shift_strength": 0.75,
+        "heteroskedastic_noise_strength": 0.35,
+        "nonlinear_warp_strength": 1.1,
+        "class_conditional_style_strength": 0.2,
+        "site_specific_feature_interaction_strength": 0.25,
+        "label_site_confounding_strength": 0.05,
+        "random_seed_offset": 300,
+    },
+    "covariance_shift_low_confounding": {
+        "generator": "nonlinear",
+        "additive_shift_strength": 0.1,
+        "covariance_shift_strength": 1.2,
+        "rotation_shift_strength": 0.15,
+        "heteroskedastic_noise_strength": 0.1,
+        "nonlinear_warp_strength": 0.0,
+        "class_conditional_style_strength": 0.0,
+        "site_specific_feature_interaction_strength": 0.0,
+        "label_site_confounding_strength": 0.05,
+        "random_seed_offset": 400,
+    },
+    "heteroskedastic_shift_low_confounding": {
+        "generator": "nonlinear",
+        "additive_shift_strength": 0.1,
+        "covariance_shift_strength": 0.2,
+        "rotation_shift_strength": 0.2,
+        "heteroskedastic_noise_strength": 1.1,
+        "nonlinear_warp_strength": 0.15,
+        "class_conditional_style_strength": 0.0,
+        "site_specific_feature_interaction_strength": 0.1,
+        "label_site_confounding_strength": 0.05,
+        "random_seed_offset": 500,
+    },
+    "mixed_realistic_shift_low_confounding": {
+        "generator": "nonlinear",
+        "additive_shift_strength": 0.35,
+        "covariance_shift_strength": 0.8,
+        "rotation_shift_strength": 0.8,
+        "heteroskedastic_noise_strength": 0.6,
+        "nonlinear_warp_strength": 0.8,
+        "class_conditional_style_strength": 0.25,
+        "site_specific_feature_interaction_strength": 0.35,
+        "label_site_confounding_strength": 0.05,
+        "random_seed_offset": 600,
+    },
+    "mixed_realistic_shift_strong_confounding": {
+        "generator": "nonlinear",
+        "additive_shift_strength": 0.35,
+        "covariance_shift_strength": 0.8,
+        "rotation_shift_strength": 0.8,
+        "heteroskedastic_noise_strength": 0.6,
+        "nonlinear_warp_strength": 0.8,
+        "class_conditional_style_strength": 0.25,
+        "site_specific_feature_interaction_strength": 0.35,
+        "label_site_confounding_strength": 1.5,
+        "random_seed_offset": 700,
     },
 }
 
@@ -156,17 +222,11 @@ def run_multiseed_eval(
         preset = PRESETS[setting_name]
         for seed in seeds:
             dataset_seed = seed + int(preset["random_seed_offset"])
-            dataset = generate_synthetic_feature_dataset(
-                n_centers=3,
+            dataset = _generate_dataset(
+                preset=preset,
+                dataset_seed=dataset_seed,
                 samples_per_center=samples_per_center,
                 n_features=n_features,
-                clinical_signal_strength=1.0,
-                site_shift_strength=float(preset["site_shift_strength"]),
-                site_label_confounding_strength=float(
-                    preset["site_label_confounding_strength"]
-                ),
-                noise_strength=1.0,
-                random_seed=dataset_seed,
             )
             for target_center in target_centers:
                 run_id = f"{setting_name}_seed_{seed}_target_{target_center}"
@@ -254,6 +314,50 @@ def run_multiseed_eval(
         "aggregate_metrics": aggregate_metrics,
         "summary": summary,
     }
+
+
+def _generate_dataset(
+    *,
+    preset: dict[str, object],
+    dataset_seed: int,
+    samples_per_center: int,
+    n_features: int,
+) -> pd.DataFrame:
+    if preset.get("generator") == "nonlinear":
+        return generate_synthetic_nonlinear_multicenter_features(
+            n_centers=3,
+            samples_per_center=samples_per_center,
+            n_features=n_features,
+            clinical_signal_strength=1.0,
+            additive_shift_strength=float(preset["additive_shift_strength"]),
+            covariance_shift_strength=float(preset["covariance_shift_strength"]),
+            rotation_shift_strength=float(preset["rotation_shift_strength"]),
+            heteroskedastic_noise_strength=float(
+                preset["heteroskedastic_noise_strength"]
+            ),
+            nonlinear_warp_strength=float(preset["nonlinear_warp_strength"]),
+            class_conditional_style_strength=float(
+                preset["class_conditional_style_strength"]
+            ),
+            site_specific_feature_interaction_strength=float(
+                preset["site_specific_feature_interaction_strength"]
+            ),
+            label_site_confounding_strength=float(
+                preset["label_site_confounding_strength"]
+            ),
+            noise_strength=1.0,
+            random_seed=dataset_seed,
+        )
+    return generate_synthetic_feature_dataset(
+        n_centers=3,
+        samples_per_center=samples_per_center,
+        n_features=n_features,
+        clinical_signal_strength=1.0,
+        site_shift_strength=float(preset["site_shift_strength"]),
+        site_label_confounding_strength=float(preset["site_label_confounding_strength"]),
+        noise_strength=1.0,
+        random_seed=dataset_seed,
+    )
 
 
 def _summarize_run(
@@ -369,6 +473,8 @@ def _aggregate_summary(
                 (setting_df["confounding_status"] == "invalidates_claim").sum()
             ),
         }
+    setting_diagnostics = _setting_diagnostics(run_summary_df, per_run_metrics)
+    difficulty_flags = _difficulty_flags(setting_diagnostics)
     return {
         "seeds": seeds,
         "target_centers": target_centers,
@@ -412,9 +518,211 @@ def _aggregate_summary(
             ].shape[0]
         ),
         "settings": settings_summary,
+        "setting_diagnostics": setting_diagnostics,
+        **difficulty_flags,
         "ablation_configs": ABLATION_CONFIGS,
         "decision": _decision_from_summary(run_summary_df),
     }
+
+
+def _setting_diagnostics(
+    run_summary_df: pd.DataFrame,
+    per_run_metrics: pd.DataFrame,
+) -> dict[str, dict[str, object]]:
+    diagnostics = {}
+    for setting_name in sorted(per_run_metrics["stress_setting"].dropna().unique()):
+        method_metrics = per_run_metrics[per_run_metrics["stress_setting"] == setting_name]
+        run_metrics = run_summary_df[run_summary_df["stress_setting"] == setting_name]
+        method_target = _mean_by_method(method_metrics, "target_auc")
+        method_site_after = _mean_by_method(method_metrics, "site_auc_after")
+        method_mmd_before = _mean_by_method(method_metrics, "mmd_before")
+        method_mmd_after = _mean_by_method(method_metrics, "mmd_after")
+        method_coral_before = _mean_by_method(method_metrics, "coral_before")
+        method_coral_after = _mean_by_method(method_metrics, "coral_after")
+
+        best_statistical = _best_family_mean(method_metrics, "statistical_baseline")
+        best_ridge = _best_family_mean(method_metrics, "learned_denoising")
+        best_diffusion = _best_family_mean(method_metrics, "diffusion_v0")
+        center_mean_auc = method_target.get("center_mean")
+        statistical_values = [
+            value
+            for method, value in method_target.items()
+            if _method_family(method_metrics, method) == "statistical_baseline"
+        ]
+        center_mean_dominates = (
+            center_mean_auc is not None
+            and statistical_values
+            and center_mean_auc >= max(statistical_values)
+        )
+        diagnostics[str(setting_name)] = {
+            "raw_identity_target_auc": _optional_round(method_target.get("identity")),
+            "best_statistical_target_auc": _optional_round(best_statistical),
+            "best_ridge_target_auc": _optional_round(best_ridge),
+            "best_diffusion_v0_target_auc": _optional_round(best_diffusion),
+            "site_auc_before": _optional_round(_identity_mean(method_metrics, "site_auc_before")),
+            "site_auc_after_by_method": _round_mapping(method_site_after),
+            "mmd_before_by_method": _round_mapping(method_mmd_before),
+            "mmd_after_by_method": _round_mapping(method_mmd_after),
+            "coral_before_by_method": _round_mapping(method_coral_before),
+            "coral_after_by_method": _round_mapping(method_coral_after),
+            "confounding_status_counts": _value_counts(run_metrics, "confounding_status"),
+            "center_mean_dominates": bool(center_mean_dominates),
+            "nonlinear_shift_makes_statistical_baselines_weaker": False,
+            "diffusion_v0_beats_statistical": bool(
+                _mean_bool(run_metrics["diffusion_v0_beats_statistical_margin"]) > 0
+            ),
+            "diffusion_v0_beats_ridge": bool(
+                _mean_bool(run_metrics["diffusion_v0_beats_ridge_margin"]) > 0
+            ),
+            "diffusion_v0_win_rate_vs_statistical": _mean_bool(
+                run_metrics["diffusion_v0_win_vs_statistical"]
+            ),
+            "diffusion_v0_win_rate_vs_ridge": _mean_bool(
+                run_metrics["diffusion_v0_win_vs_ridge"]
+            ),
+            "diffusion_v0_target_margin_win_rate_vs_statistical": _mean_bool(
+                run_metrics["diffusion_v0_beats_statistical_margin"]
+            ),
+            "diffusion_v0_target_margin_win_rate_vs_ridge": _mean_bool(
+                run_metrics["diffusion_v0_beats_ridge_margin"]
+            ),
+            "claimable_diffusion_win_count": int(
+                run_metrics["diffusion_v0_claimable_win"].sum()
+            ),
+        }
+
+    reference = _reference_statistical_auc(diagnostics)
+    for setting_name, data in diagnostics.items():
+        best_statistical = data["best_statistical_target_auc"]
+        data["nonlinear_shift_makes_statistical_baselines_weaker"] = bool(
+            _is_nonlinear_setting(setting_name)
+            and reference is not None
+            and best_statistical is not None
+            and float(best_statistical) < reference - 0.01
+        )
+    return diagnostics
+
+
+def _difficulty_flags(
+    setting_diagnostics: dict[str, dict[str, object]]
+) -> dict[str, object]:
+    values = list(setting_diagnostics.values())
+    statistical_dominates = bool(
+        values
+        and all(
+            _dominates(
+                data["best_statistical_target_auc"],
+                data["best_ridge_target_auc"],
+                data["best_diffusion_v0_target_auc"],
+            )
+            for data in values
+        )
+    )
+    ridge_dominates = bool(
+        values
+        and all(
+            _dominates(
+                data["best_ridge_target_auc"],
+                data["best_statistical_target_auc"],
+                data["best_diffusion_v0_target_auc"],
+            )
+            for data in values
+        )
+    )
+    diffusion_low_confounding_win = any(
+        _is_low_confounding_setting(setting_name)
+        and int(data["claimable_diffusion_win_count"]) > 0
+        for setting_name, data in setting_diagnostics.items()
+    )
+    nonlinear_headroom = any(
+        bool(data["nonlinear_shift_makes_statistical_baselines_weaker"])
+        for data in values
+    )
+    return {
+        "statistical_baselines_dominate_all_settings": statistical_dominates,
+        "ridge_denoising_dominates_all_settings": ridge_dominates,
+        "diffusion_v0_has_any_low_confounding_win": bool(diffusion_low_confounding_win),
+        "nonlinear_settings_create_headroom": bool(nonlinear_headroom),
+    }
+
+
+def _mean_by_method(metrics: pd.DataFrame, column: str) -> dict[str, float]:
+    valid = metrics[metrics[column].notna()]
+    means = valid.groupby("method")[column].mean().sort_index()
+    return {str(method): float(value) for method, value in means.items()}
+
+
+def _best_family_mean(metrics: pd.DataFrame, family: str) -> float | None:
+    family_metrics = metrics[
+        (metrics["method_family"] == family) & metrics["target_auc"].notna()
+    ]
+    if family_metrics.empty:
+        return None
+    means = family_metrics.groupby("method")["target_auc"].mean()
+    return float(means.max())
+
+
+def _method_family(metrics: pd.DataFrame, method: str) -> str | None:
+    rows = metrics[metrics["method"] == method]
+    if rows.empty:
+        return None
+    return str(rows.iloc[0]["method_family"])
+
+
+def _optional_round(value: float | None) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    return round(float(value), 6)
+
+
+def _identity_mean(metrics: pd.DataFrame, column: str) -> float | None:
+    rows = metrics[(metrics["method"] == "identity") & metrics[column].notna()]
+    if rows.empty:
+        return None
+    return float(rows[column].mean())
+
+
+def _round_mapping(values: dict[str, float]) -> dict[str, float]:
+    return {key: round(float(value), 6) for key, value in values.items()}
+
+
+def _value_counts(df: pd.DataFrame, column: str) -> dict[str, int]:
+    if column not in df:
+        return {}
+    counts = df[column].value_counts().sort_index()
+    return {str(key): int(value) for key, value in counts.items()}
+
+
+def _reference_statistical_auc(
+    setting_diagnostics: dict[str, dict[str, object]]
+) -> float | None:
+    values = [
+        data["best_statistical_target_auc"]
+        for setting_name, data in setting_diagnostics.items()
+        if not _is_nonlinear_setting(setting_name)
+        and data["best_statistical_target_auc"] is not None
+    ]
+    if not values:
+        return None
+    return max(float(value) for value in values)
+
+
+def _is_nonlinear_setting(setting_name: str) -> bool:
+    return any(
+        token in setting_name
+        for token in ("nonlinear", "covariance", "heteroskedastic", "mixed_realistic")
+    )
+
+
+def _is_low_confounding_setting(setting_name: str) -> bool:
+    return "strong_confounding" not in setting_name
+
+
+def _dominates(candidate: object, *baselines: object) -> bool:
+    if candidate is None:
+        return False
+    candidate_value = float(candidate)
+    return all(baseline is None or candidate_value >= float(baseline) for baseline in baselines)
 
 
 def _decision_from_summary(run_summary_df: pd.DataFrame) -> str:
@@ -442,6 +750,14 @@ def _render_report(summary: dict[str, object], aggregate: pd.DataFrame) -> str:
             f"- Claim gate pass rate: `{summary['claim_gate_pass_rate']}`",
             f"- Confounding invalidations: `{summary['confounding_invalidation_count']}`",
             f"- Target labels used count: `{summary['target_labels_used_count']}`",
+            "- Statistical baselines dominate all settings: "
+            f"`{summary['statistical_baselines_dominate_all_settings']}`",
+            "- Ridge denoising dominates all settings: "
+            f"`{summary['ridge_denoising_dominates_all_settings']}`",
+            "- Diffusion v0 has any low-confounding win: "
+            f"`{summary['diffusion_v0_has_any_low_confounding_win']}`",
+            "- Nonlinear settings create headroom: "
+            f"`{summary['nonlinear_settings_create_headroom']}`",
             "- placeholder_not_counted_as_real_diffusion: "
             f"`{summary['placeholder_real_diffusion_rows'] == 0}`",
             f"- Decision: `{summary['decision']}`",
