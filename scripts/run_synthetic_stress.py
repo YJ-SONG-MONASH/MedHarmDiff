@@ -31,6 +31,8 @@ METHODS = [
     "mmd_mean_alignment",
     "ridge_denoising",
     "ridge_denoising_clinical_preserving",
+    "latent_diffusion_v0",
+    "latent_diffusion_clinical_preserving_v0",
     "diffusion_placeholder",
 ]
 
@@ -134,6 +136,9 @@ def run_stress_presets(
         "learned_denoising_helps_only_in_strong_shift_setting": _helps_only_in_strong_shift(
             settings
         ),
+        "diffusion_only_helps_in_strong_shift_low_confounding": (
+            _diffusion_only_helps_in_strong_shift(settings)
+        ),
         "confounding_blocks_claims": _confounding_blocks_claims(settings),
     }
 
@@ -148,16 +153,35 @@ def _summarize_setting(setting_dir: Path) -> dict[str, object]:
     learned = metrics[
         (metrics["method_family"] == "learned_denoising") & metrics["target_auc"].notna()
     ]
+    diffusion = metrics[
+        (metrics["method_family"] == "diffusion_v0") & metrics["target_auc"].notna()
+    ]
     best_statistical = _best_row(statistical)
     best_learned = _best_row(learned)
+    best_diffusion = _best_row(diffusion)
     learned_beats = (
         best_statistical is not None
         and best_learned is not None
         and float(best_learned["target_auc"]) >= float(best_statistical["target_auc"]) + 0.01
     )
+    diffusion_beats_learned = (
+        best_diffusion is not None
+        and best_learned is not None
+        and float(best_diffusion["target_auc"]) >= float(best_learned["target_auc"]) + 0.01
+    )
+    diffusion_beats_statistical = (
+        best_diffusion is not None
+        and best_statistical is not None
+        and float(best_diffusion["target_auc"]) >= float(best_statistical["target_auc"]) + 0.01
+    )
     learned_site_improves = (
         best_learned is not None
         and float(best_learned["site_auc_after"]) < float(best_learned["site_auc_before"])
+    )
+    diffusion_site_improves = (
+        best_diffusion is not None
+        and float(best_diffusion["site_auc_after"])
+        < float(best_diffusion["site_auc_before"])
     )
     return {
         "best_statistical_baseline": None
@@ -172,8 +196,17 @@ def _summarize_setting(setting_dir: Path) -> dict[str, object]:
         "best_learned_denoising_target_auc": None
         if best_learned is None
         else float(best_learned["target_auc"]),
+        "best_diffusion_v0_method": None
+        if best_diffusion is None
+        else str(best_diffusion["method"]),
+        "best_diffusion_v0_target_auc": None
+        if best_diffusion is None
+        else float(best_diffusion["target_auc"]),
         "learned_denoising_beats_statistical": learned_beats,
         "learned_denoising_site_improves": learned_site_improves,
+        "diffusion_v0_beats_learned_denoising": diffusion_beats_learned,
+        "diffusion_v0_beats_statistical": diffusion_beats_statistical,
+        "diffusion_v0_site_improves": diffusion_site_improves,
         "claim_gate_status": claim["status"],
         "confounding_status": run_config["confounding_audit"]["confounding_status"],
     }
@@ -202,17 +235,31 @@ def _confounding_blocks_claims(settings: dict[str, dict[str, object]]) -> bool:
     )
 
 
+def _diffusion_only_helps_in_strong_shift(settings: dict[str, dict[str, object]]) -> bool:
+    strong = settings["setting_a_strong_shift_low_confounding"]
+    weak = settings["setting_c_weak_site_shift"]
+    confounded = settings["setting_b_strong_confounding"]
+    return bool(
+        strong["diffusion_v0_beats_learned_denoising"]
+        and strong["diffusion_v0_beats_statistical"]
+        and not weak["diffusion_v0_beats_learned_denoising"]
+        and confounded["confounding_status"] != "pass"
+    )
+
+
 def _render_summary_md(summary: dict[str, object]) -> str:
     rows = [
-        "| setting | best statistical | best learned denoising | claim gate | confounding |",
-        "| --- | --- | --- | --- | --- |",
+        "| setting | best statistical | best learned denoising | "
+        "best diffusion v0 | claim gate | confounding |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for setting, data in summary["settings"].items():
         rows.append(
-            "| {setting} | {stat} | {learned} | {claim} | {confounding} |".format(
+            "| {setting} | {stat} | {learned} | {diffusion} | {claim} | {confounding} |".format(
                 setting=setting,
                 stat=data["best_statistical_baseline"],
                 learned=data["best_learned_denoising_method"],
+                diffusion=data["best_diffusion_v0_method"],
                 claim=data["claim_gate_status"],
                 confounding=data["confounding_status"],
             )
@@ -225,6 +272,8 @@ def _render_summary_md(summary: dict[str, object]) -> str:
             "",
             "- Learned denoising helps only in strong-shift setting: "
             f"`{summary['learned_denoising_helps_only_in_strong_shift_setting']}`",
+            "- Diffusion v0 helps only in strong-shift/low-confounding setting: "
+            f"`{summary['diffusion_only_helps_in_strong_shift_low_confounding']}`",
             f"- Confounding blocks claims: `{summary['confounding_blocks_claims']}`",
             "",
         ]

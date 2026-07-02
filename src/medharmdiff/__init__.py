@@ -20,4 +20,5 @@ __all__ = [
     "io",
     "confounding",
     "latent_denoising",
+    "latent_diffusion",
 ]

@@ -29,6 +29,10 @@ from .latent_denoising import (
     ClinicalPreservingRidgeDenoisingHarmonizer,
     RidgeDenoisingHarmonizer,
 )
+from .latent_diffusion import (
+    ClinicalPreservingTimeConditionedRidgeDiffusionHarmonizer,
+    TimeConditionedRidgeDiffusionHarmonizer,
+)
 from .metrics import binary_classification_metrics, coral_distance, mmd_rbf
 
 
@@ -48,6 +52,8 @@ class FeatureBenchmarkConfig:
             "mmd_mean_alignment",
             "ridge_denoising",
             "ridge_denoising_clinical_preserving",
+            "latent_diffusion_v0",
+            "latent_diffusion_clinical_preserving_v0",
             "diffusion_placeholder",
         ]
     )
@@ -109,6 +115,21 @@ _METHODS: dict[str, _MethodSpec] = {
         lambda: ClinicalPreservingRidgeDenoisingHarmonizer(),
         method_family="learned_denoising",
         is_learned_denoising=True,
+    ),
+    "latent_diffusion_v0": _MethodSpec(
+        lambda: TimeConditionedRidgeDiffusionHarmonizer(),
+        method_family="diffusion_v0",
+        is_diffusion=True,
+    ),
+    "time_conditioned_ridge_diffusion": _MethodSpec(
+        lambda: TimeConditionedRidgeDiffusionHarmonizer(),
+        method_family="diffusion_v0",
+        is_diffusion=True,
+    ),
+    "latent_diffusion_clinical_preserving_v0": _MethodSpec(
+        lambda: ClinicalPreservingTimeConditionedRidgeDiffusionHarmonizer(),
+        method_family="diffusion_v0",
+        is_diffusion=True,
     ),
     "adversarial_domain_adaptation": _MethodSpec(None, placeholder=True, runnable=False),
     "vae_harmonization": _MethodSpec(None, placeholder=True, runnable=False),
@@ -422,7 +443,7 @@ def _build_claim_summary(
     baseline_rows = successful[~successful["is_diffusion"].astype(bool)]
     no_harm_rows = successful[successful["method"].isin(["no_harmonization", "identity"])]
 
-    diffusion = diffusion_rows.iloc[0] if not diffusion_rows.empty else None
+    diffusion = _select_claim_diffusion_row(diffusion_rows)
     no_harm = no_harm_rows.iloc[0] if not no_harm_rows.empty else None
     best_baseline = (
         float(baseline_rows["target_auc"].max())
@@ -469,6 +490,7 @@ def _render_report(
     baselines = successful[~successful["is_diffusion"].astype(bool)]
     statistical_baselines = baselines[baselines["method_family"] == "statistical_baseline"]
     learned_denoising = successful[successful["method_family"] == "learned_denoising"]
+    diffusion_v0 = successful[successful["method_family"] == "diffusion_v0"]
     strongest = (
         "none"
         if statistical_baselines.empty or not statistical_baselines["target_auc"].notna().any()
@@ -477,9 +499,14 @@ def _render_report(
         )
     )
     learned_summary = _learned_denoising_summary(learned_denoising, statistical_baselines)
+    diffusion_summary = _diffusion_v0_summary(
+        diffusion_v0,
+        statistical_baselines,
+        learned_denoising,
+    )
     diffusion_rows = successful[successful["is_diffusion"].astype(bool)]
     diffusion_placeholder = (
-        False if diffusion_rows.empty else bool(diffusion_rows.iloc[0]["is_placeholder"])
+        False if diffusion_rows.empty else bool(diffusion_rows["is_placeholder"].any())
     )
     train_centers = ", ".join(sorted(source_df[config.center_column].astype(str).unique()))
     confounding_audit = audit_label_site_confounding(
@@ -559,12 +586,34 @@ def _render_report(
             f"- Source clinical performance preserved: `{learned_summary['source_preserved']}`",
             "- Warning: ridge denoising is not yet diffusion and is not a diffusion contribution.",
             "",
+            "## Latent Diffusion v0",
+            "",
+            f"- Best latent diffusion v0 method: `{diffusion_summary['best_method']}`",
+            f"- Beats strongest statistical baseline: `{diffusion_summary['beats_statistical']}`",
+            "- Beats best learned denoising baseline: "
+            f"`{diffusion_summary['beats_learned_denoising']}`",
+            f"- Site metrics improve: `{diffusion_summary['site_improves']}`",
+            f"- Source clinical performance preserved: `{diffusion_summary['source_preserved']}`",
+            "- Warning: this is a lightweight time-conditioned ridge diffusion v0, "
+            "not a full DDPM.",
+            "",
             "## Safe Conclusion",
             "",
-            "Do not claim diffusion works yet if the row is a placeholder or the gate fails.",
+            "Do not claim diffusion works unless the claim gate passes.",
             "",
         ]
     )
+
+
+def _select_claim_diffusion_row(diffusion_rows: pd.DataFrame) -> pd.Series | None:
+    if diffusion_rows.empty:
+        return None
+    real_rows = diffusion_rows[
+        (~diffusion_rows["is_placeholder"].astype(bool)) & diffusion_rows["target_auc"].notna()
+    ]
+    if not real_rows.empty:
+        return real_rows.sort_values("target_auc", ascending=False).iloc[0]
+    return diffusion_rows.iloc[0]
 
 
 def _learned_denoising_summary(
@@ -596,6 +645,50 @@ def _learned_denoising_summary(
         "site_improves": float(best_learned["site_auc_after"])
         < float(best_learned["site_auc_before"]),
         "source_preserved": best_stat_source is None or learned_source >= best_stat_source - 0.01,
+    }
+
+
+def _diffusion_v0_summary(
+    diffusion: pd.DataFrame,
+    statistical: pd.DataFrame,
+    learned: pd.DataFrame,
+) -> dict[str, object]:
+    if diffusion.empty or not diffusion["target_auc"].notna().any():
+        return {
+            "best_method": "none",
+            "beats_statistical": False,
+            "beats_learned_denoising": False,
+            "site_improves": False,
+            "source_preserved": False,
+        }
+    best_diffusion = diffusion.sort_values("target_auc", ascending=False).iloc[0]
+    best_stat_auc = (
+        None
+        if statistical.empty or not statistical["target_auc"].notna().any()
+        else float(statistical["target_auc"].max())
+    )
+    best_learned_auc = (
+        None
+        if learned.empty or not learned["target_auc"].notna().any()
+        else float(learned["target_auc"].max())
+    )
+    best_baseline_source = (
+        None
+        if statistical.empty or not statistical["source_val_auc"].notna().any()
+        else float(statistical["source_val_auc"].max())
+    )
+    diffusion_target = float(best_diffusion["target_auc"])
+    diffusion_source = float(best_diffusion["source_val_auc"])
+    return {
+        "best_method": str(best_diffusion["method"]),
+        "beats_statistical": best_stat_auc is not None
+        and diffusion_target >= best_stat_auc + 0.01,
+        "beats_learned_denoising": best_learned_auc is not None
+        and diffusion_target >= best_learned_auc + 0.01,
+        "site_improves": float(best_diffusion["site_auc_after"])
+        < float(best_diffusion["site_auc_before"]),
+        "source_preserved": best_baseline_source is None
+        or diffusion_source >= best_baseline_source - 0.01,
     }
 
 

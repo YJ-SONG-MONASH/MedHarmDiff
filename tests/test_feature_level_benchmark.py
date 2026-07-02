@@ -379,3 +379,55 @@ def test_learned_denoising_methods_are_reported_without_claiming_diffusion(tmp_p
     report = result.report_path.read_text(encoding="utf-8")
     assert "## Learned Denoising Baselines" in report
     assert "not yet diffusion" in report
+
+
+def test_latent_diffusion_v0_methods_are_real_diffusion_rows(tmp_path) -> None:
+    dataset = generate_synthetic_feature_dataset(
+        n_centers=3,
+        samples_per_center=32,
+        n_features=6,
+        site_shift_strength=2.0,
+        random_seed=71,
+    )
+    feature_path = tmp_path / "features.csv"
+    dataset.to_csv(feature_path, index=False)
+    methods = [
+        "identity",
+        "center_mean",
+        "ridge_denoising",
+        "latent_diffusion_v0",
+        "latent_diffusion_clinical_preserving_v0",
+        "diffusion_placeholder",
+    ]
+
+    result = run_feature_level_benchmark(
+        FeatureBenchmarkConfig(
+            run_name="latent_diffusion_v0",
+            feature_path=feature_path,
+            output_dir=tmp_path / "results",
+            target_center="C",
+            setting="zero_shot",
+            methods=methods,
+            random_seed=73,
+        )
+    )
+
+    metrics = pd.read_csv(result.metrics_path)
+    metrics_json = json.loads(result.metrics_json_path.read_text(encoding="utf-8"))
+    by_method = metrics.set_index("method")
+    assert by_method.loc["latent_diffusion_v0", "method_family"] == "diffusion_v0"
+    assert by_method.loc["latent_diffusion_v0", "is_diffusion"]
+    assert not by_method.loc["latent_diffusion_v0", "is_placeholder"]
+    assert not by_method.loc["latent_diffusion_v0", "is_learned_denoising"]
+    assert (
+        by_method.loc["latent_diffusion_clinical_preserving_v0", "method_family"]
+        == "diffusion_v0"
+    )
+    assert by_method.loc["diffusion_placeholder", "is_placeholder"]
+    assert any(row["method"] == "latent_diffusion_v0" for row in metrics_json)
+
+    claim_summary = json.loads(result.claim_gate_path.read_text(encoding="utf-8"))
+    assert claim_summary["status"] != "diffusion_contribution_established"
+    assert claim_summary["metrics"]["diffusion_is_placeholder"] is False
+    report = result.report_path.read_text(encoding="utf-8")
+    assert "## Latent Diffusion v0" in report

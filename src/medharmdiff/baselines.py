@@ -9,6 +9,10 @@ from .latent_denoising import (
     ClinicalPreservingRidgeDenoisingHarmonizer,
     RidgeDenoisingHarmonizer,
 )
+from .latent_diffusion import (
+    ClinicalPreservingTimeConditionedRidgeDiffusionHarmonizer,
+    TimeConditionedRidgeDiffusionHarmonizer,
+)
 
 
 class Harmonizer(Protocol):

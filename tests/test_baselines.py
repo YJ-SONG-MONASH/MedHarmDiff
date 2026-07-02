@@ -3,11 +3,13 @@ import numpy as np
 from medharmdiff.baselines import (
     CenterMeanHarmonizer,
     ClinicalPreservingRidgeDenoisingHarmonizer,
+    ClinicalPreservingTimeConditionedRidgeDiffusionHarmonizer,
     CoralHarmonizer,
     IdentityHarmonizer,
     MMDMeanAlignmentHarmonizer,
     RidgeDenoisingHarmonizer,
     StandardizeBySourceHarmonizer,
+    TimeConditionedRidgeDiffusionHarmonizer,
 )
 
 
@@ -31,6 +33,11 @@ def test_harmonizers_preserve_feature_shape() -> None:
         CenterMeanHarmonizer(),
         RidgeDenoisingHarmonizer(random_seed=7),
         ClinicalPreservingRidgeDenoisingHarmonizer(random_seed=7),
+        TimeConditionedRidgeDiffusionHarmonizer(num_steps=3, random_seed=7),
+        ClinicalPreservingTimeConditionedRidgeDiffusionHarmonizer(
+            num_steps=3,
+            random_seed=7,
+        ),
     ]
     target_unlabeled = [
         CoralHarmonizer(),

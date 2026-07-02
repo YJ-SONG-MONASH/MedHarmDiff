@@ -40,9 +40,14 @@ def test_synthetic_stress_runner_writes_summary_and_setting_artifacts(tmp_path) 
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert set(summary["settings"]) == settings
+    assert "diffusion_only_helps_in_strong_shift_low_confounding" in summary
+    assert "confounding_blocks_claims" in summary
     confounded = summary["settings"]["setting_b_strong_confounding"]
     assert confounded["claim_gate_status"] != "diffusion_contribution_established"
     assert confounded["confounding_status"] in {
         "warn_label_site_association",
         "invalidates_claim",
     }
+    for data in summary["settings"].values():
+        assert "best_diffusion_v0_method" in data
+        assert "diffusion_v0_beats_learned_denoising" in data
