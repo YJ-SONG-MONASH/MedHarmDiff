@@ -327,3 +327,55 @@ def test_cli_synthetic_with_run_name_writes_dataset_inside_run_dir(tmp_path) -> 
     run_config = json.loads((run_dir / "run_config.json").read_text(encoding="utf-8"))
     assert run_config["data_source"] == "synthetic"
     assert run_config["synthetic_params"]["noise_strength"] == 0.7
+
+
+def test_learned_denoising_methods_are_reported_without_claiming_diffusion(tmp_path) -> None:
+    dataset = generate_synthetic_feature_dataset(
+        n_centers=3,
+        samples_per_center=32,
+        n_features=6,
+        site_shift_strength=2.0,
+        random_seed=61,
+    )
+    feature_path = tmp_path / "features.csv"
+    dataset.to_csv(feature_path, index=False)
+    methods = [
+        "identity",
+        "source_standardize",
+        "center_mean",
+        "ridge_denoising",
+        "ridge_denoising_clinical_preserving",
+        "diffusion_placeholder",
+    ]
+
+    result = run_feature_level_benchmark(
+        FeatureBenchmarkConfig(
+            run_name="learned_denoising",
+            feature_path=feature_path,
+            output_dir=tmp_path / "results",
+            target_center="C",
+            setting="zero_shot",
+            methods=methods,
+            random_seed=67,
+        )
+    )
+
+    metrics = pd.read_csv(result.metrics_path)
+    metrics_json = json.loads(result.metrics_json_path.read_text(encoding="utf-8"))
+    by_method = metrics.set_index("method")
+    assert by_method.loc["ridge_denoising", "method_family"] == "learned_denoising"
+    assert by_method.loc["ridge_denoising", "is_learned_denoising"]
+    assert not by_method.loc["ridge_denoising", "is_diffusion"]
+    assert not by_method.loc["ridge_denoising", "uses_target_labels"]
+    assert (
+        by_method.loc["ridge_denoising_clinical_preserving", "method_family"]
+        == "learned_denoising"
+    )
+    assert any(row["method"] == "ridge_denoising" for row in metrics_json)
+
+    claim_summary = json.loads(result.claim_gate_path.read_text(encoding="utf-8"))
+    assert claim_summary["status"] == "insufficient_data"
+    assert claim_summary["metrics"]["diffusion_is_placeholder"] is True
+    report = result.report_path.read_text(encoding="utf-8")
+    assert "## Learned Denoising Baselines" in report
+    assert "not yet diffusion" in report

@@ -5,6 +5,11 @@ from typing import Protocol
 
 import numpy as np
 
+from .latent_denoising import (
+    ClinicalPreservingRidgeDenoisingHarmonizer,
+    RidgeDenoisingHarmonizer,
+)
+
 
 class Harmonizer(Protocol):
     def fit(

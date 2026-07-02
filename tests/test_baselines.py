@@ -2,9 +2,11 @@ import numpy as np
 
 from medharmdiff.baselines import (
     CenterMeanHarmonizer,
+    ClinicalPreservingRidgeDenoisingHarmonizer,
     CoralHarmonizer,
     IdentityHarmonizer,
     MMDMeanAlignmentHarmonizer,
+    RidgeDenoisingHarmonizer,
     StandardizeBySourceHarmonizer,
 )
 
@@ -27,6 +29,8 @@ def test_harmonizers_preserve_feature_shape() -> None:
         IdentityHarmonizer(),
         StandardizeBySourceHarmonizer(),
         CenterMeanHarmonizer(),
+        RidgeDenoisingHarmonizer(random_seed=7),
+        ClinicalPreservingRidgeDenoisingHarmonizer(random_seed=7),
     ]
     target_unlabeled = [
         CoralHarmonizer(),

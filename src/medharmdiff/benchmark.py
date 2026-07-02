@@ -25,6 +25,10 @@ from .baselines import (
 from .claim_gate import evaluate_harmonization_claim
 from .confounding import audit_label_site_confounding
 from .io import load_feature_csv
+from .latent_denoising import (
+    ClinicalPreservingRidgeDenoisingHarmonizer,
+    RidgeDenoisingHarmonizer,
+)
 from .metrics import binary_classification_metrics, coral_distance, mmd_rbf
 
 
@@ -42,6 +46,8 @@ class FeatureBenchmarkConfig:
             "center_mean",
             "coral",
             "mmd_mean_alignment",
+            "ridge_denoising",
+            "ridge_denoising_clinical_preserving",
             "diffusion_placeholder",
         ]
     )
@@ -71,6 +77,9 @@ class _MethodSpec:
     uses_target_unlabeled: bool = False
     placeholder: bool = False
     runnable: bool = True
+    method_family: str = "statistical_baseline"
+    is_learned_denoising: bool = False
+    is_diffusion: bool = False
 
 
 _METHODS: dict[str, _MethodSpec] = {
@@ -91,16 +100,35 @@ _METHODS: dict[str, _MethodSpec] = {
     "mmd_mean_target_unlabeled": _MethodSpec(
         lambda: MMDMeanAlignmentHarmonizer(), uses_target_unlabeled=True
     ),
+    "ridge_denoising": _MethodSpec(
+        lambda: RidgeDenoisingHarmonizer(),
+        method_family="learned_denoising",
+        is_learned_denoising=True,
+    ),
+    "ridge_denoising_clinical_preserving": _MethodSpec(
+        lambda: ClinicalPreservingRidgeDenoisingHarmonizer(),
+        method_family="learned_denoising",
+        is_learned_denoising=True,
+    ),
     "adversarial_domain_adaptation": _MethodSpec(None, placeholder=True, runnable=False),
     "vae_harmonization": _MethodSpec(None, placeholder=True, runnable=False),
     "diffusion_harmonization": _MethodSpec(
-        lambda: DiffusionPlaceholderHarmonizer(), placeholder=True
+        lambda: DiffusionPlaceholderHarmonizer(),
+        placeholder=True,
+        method_family="diffusion_placeholder",
+        is_diffusion=True,
     ),
     "diffusion_placeholder": _MethodSpec(
-        lambda: DiffusionPlaceholderHarmonizer(), placeholder=True
+        lambda: DiffusionPlaceholderHarmonizer(),
+        placeholder=True,
+        method_family="diffusion_placeholder",
+        is_diffusion=True,
     ),
     "diffusion_clinical_preserving": _MethodSpec(
-        lambda: DiffusionPlaceholderHarmonizer(), placeholder=True
+        lambda: DiffusionPlaceholderHarmonizer(),
+        placeholder=True,
+        method_family="diffusion_placeholder",
+        is_diffusion=True,
     ),
 }
 
@@ -213,6 +241,7 @@ def _evaluate_method(
     spec = _METHODS.get(method)
     base_row: dict[str, object] = {
         "method": method,
+        "method_family": "unknown",
         "status": "ok",
         "target_auc": None,
         "target_accuracy": None,
@@ -231,6 +260,8 @@ def _evaluate_method(
         "coral_distance": None,
         "uses_target_unlabeled": False,
         "uses_target_labels": False,
+        "is_learned_denoising": False,
+        "is_diffusion": False,
         "is_placeholder": False,
     }
     if spec is None:
@@ -241,10 +272,16 @@ def _evaluate_method(
     before = _site_shift_metrics(val_x, target_x, config.random_seed, phase="before")
 
     if spec.uses_target_unlabeled and config.setting == "zero_shot":
-        return {**base_row, **before, "status": "not_applicable_zero_shot"}
+        return {
+            **base_row,
+            **_method_flags(spec),
+            **before,
+            "status": "not_applicable_zero_shot",
+        }
     if not spec.runnable or spec.factory is None:
         return {
             **base_row,
+            **_method_flags(spec),
             **before,
             "status": "placeholder_not_implemented",
             "is_placeholder": True,
@@ -270,6 +307,7 @@ def _evaluate_method(
 
     return {
         **base_row,
+        **_method_flags(spec),
         **before,
         **after,
         "status": "placeholder" if spec.placeholder else "ok",
@@ -285,6 +323,14 @@ def _evaluate_method(
         "uses_target_unlabeled": uses_target_unlabeled,
         "uses_target_labels": False,
         "is_placeholder": spec.placeholder,
+    }
+
+
+def _method_flags(spec: _MethodSpec) -> dict[str, object]:
+    return {
+        "method_family": spec.method_family,
+        "is_learned_denoising": spec.is_learned_denoising,
+        "is_diffusion": spec.is_diffusion,
     }
 
 
@@ -372,8 +418,8 @@ def _build_claim_summary(
     metrics: pd.DataFrame, full_df: pd.DataFrame, config: FeatureBenchmarkConfig
 ) -> dict[str, object]:
     successful = metrics[metrics["status"].isin(["ok", "placeholder"])].copy()
-    diffusion_rows = successful[successful["method"].str.startswith("diffusion")]
-    baseline_rows = successful[~successful["method"].str.startswith("diffusion")]
+    diffusion_rows = successful[successful["is_diffusion"].astype(bool)]
+    baseline_rows = successful[~successful["is_diffusion"].astype(bool)]
     no_harm_rows = successful[successful["method"].isin(["no_harmonization", "identity"])]
 
     diffusion = diffusion_rows.iloc[0] if not diffusion_rows.empty else None
@@ -420,13 +466,18 @@ def _render_report(
     feature_columns: list[str],
 ) -> str:
     successful = metrics[metrics["status"].isin(["ok", "placeholder"])]
-    baselines = successful[~successful["method"].str.startswith("diffusion")]
+    baselines = successful[~successful["is_diffusion"].astype(bool)]
+    statistical_baselines = baselines[baselines["method_family"] == "statistical_baseline"]
+    learned_denoising = successful[successful["method_family"] == "learned_denoising"]
     strongest = (
         "none"
-        if baselines.empty or not baselines["target_auc"].notna().any()
-        else str(baselines.sort_values("target_auc", ascending=False).iloc[0]["method"])
+        if statistical_baselines.empty or not statistical_baselines["target_auc"].notna().any()
+        else str(
+            statistical_baselines.sort_values("target_auc", ascending=False).iloc[0]["method"]
+        )
     )
-    diffusion_rows = successful[successful["method"].str.startswith("diffusion")]
+    learned_summary = _learned_denoising_summary(learned_denoising, statistical_baselines)
+    diffusion_rows = successful[successful["is_diffusion"].astype(bool)]
     diffusion_placeholder = (
         False if diffusion_rows.empty else bool(diffusion_rows.iloc[0]["is_placeholder"])
     )
@@ -448,6 +499,7 @@ def _render_report(
     )
     result_columns = [
         "method",
+        "method_family",
         "target_auc",
         "source_val_auc",
         "site_auc_before",
@@ -456,6 +508,9 @@ def _render_report(
         "mmd_after",
         "coral_before",
         "coral_after",
+        "is_learned_denoising",
+        "is_diffusion",
+        "is_placeholder",
         "status",
     ]
     metrics_csv = metrics[result_columns].to_csv(index=False, lineterminator="\n")
@@ -492,9 +547,17 @@ def _render_report(
             "",
             "## Interpretation",
             "",
-            f"- Strongest non-diffusion baseline: `{strongest}`",
+            f"- Strongest statistical non-diffusion baseline: `{strongest}`",
             f"- Diffusion placeholder: `{diffusion_placeholder}`",
             "- Site reduction and clinical preservation are reported separately above.",
+            "",
+            "## Learned Denoising Baselines",
+            "",
+            f"- Best learned denoising method: `{learned_summary['best_method']}`",
+            f"- Beats strongest statistical baseline: `{learned_summary['beats_statistical']}`",
+            f"- Site metrics improve: `{learned_summary['site_improves']}`",
+            f"- Source clinical performance preserved: `{learned_summary['source_preserved']}`",
+            "- Warning: ridge denoising is not yet diffusion and is not a diffusion contribution.",
             "",
             "## Safe Conclusion",
             "",
@@ -502,6 +565,38 @@ def _render_report(
             "",
         ]
     )
+
+
+def _learned_denoising_summary(
+    learned: pd.DataFrame, statistical: pd.DataFrame
+) -> dict[str, object]:
+    if learned.empty or not learned["target_auc"].notna().any():
+        return {
+            "best_method": "none",
+            "beats_statistical": False,
+            "site_improves": False,
+            "source_preserved": False,
+        }
+    best_learned = learned.sort_values("target_auc", ascending=False).iloc[0]
+    best_stat_auc = (
+        None
+        if statistical.empty or not statistical["target_auc"].notna().any()
+        else float(statistical["target_auc"].max())
+    )
+    best_stat_source = (
+        None
+        if statistical.empty or not statistical["source_val_auc"].notna().any()
+        else float(statistical["source_val_auc"].max())
+    )
+    learned_target = float(best_learned["target_auc"])
+    learned_source = float(best_learned["source_val_auc"])
+    return {
+        "best_method": str(best_learned["method"]),
+        "beats_statistical": best_stat_auc is not None and learned_target >= best_stat_auc + 0.01,
+        "site_improves": float(best_learned["site_auc_after"])
+        < float(best_learned["site_auc_before"]),
+        "source_preserved": best_stat_source is None or learned_source >= best_stat_source - 0.01,
+    }
 
 
 def _site_shift_metrics(
