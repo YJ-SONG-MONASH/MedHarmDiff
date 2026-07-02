@@ -150,3 +150,37 @@ Sources:
 Do not continue to neural diffusion yet. The next concrete task is a
 Camelyon17-WILDS metadata probe and converter plan that emits only a feature
 CSV contract sample, not raw data.
+
+## Camelyon17-WILDS Pilot Implementation Status
+
+The pilot is now scaffolded for local, ignored data only:
+
+- Metadata probe script:
+  `scripts/probe_camelyon17_wilds_metadata.py`
+- Embedding-to-feature CSV converter:
+  `scripts/convert_camelyon17_embeddings_to_feature_csv.py`
+- Feature CSV contract:
+  `docs/real_feature_csv_contract.md`
+- Pure metadata/conversion helpers:
+  `src/medharmdiff/real_pilots/camelyon17_wilds.py`
+
+The metadata probe can read a local metadata CSV and report row counts,
+hospital/domain counts, label prevalence by center, split counts, grouping-key
+availability, and candidate leakage risks. The optional WILDS package path is
+explicitly gated behind `--use-wilds` and does not download by default.
+
+The converter can join local metadata with local precomputed embeddings in CSV
+or NPZ format and write a MedHarmDiff feature CSV with:
+
+```text
+sample_id,center_id,label,patient_or_group_id,split_group,feature_0,...,feature_N
+```
+
+Remaining blockers before a real benchmark run:
+
+- Confirm the exact WILDS/Camelyon17 metadata fields exposed by the local WILDS
+  version or exported CSV.
+- Confirm patient/slide grouping IDs are available and can prevent leakage.
+- Generate frozen patch embeddings under ignored `data/`.
+- Run the feature CSV contract validator before any benchmark.
+- Run the existing feature-level benchmark only after the metadata audit passes.
