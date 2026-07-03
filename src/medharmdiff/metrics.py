@@ -47,11 +47,19 @@ def coral_distance(source: np.ndarray, target: np.ndarray) -> float:
     return round(float(np.linalg.norm(cs - ct, ord="fro") / (4 * source.shape[1] ** 2)), 6)
 
 
-def mmd_rbf(source: np.ndarray, target: np.ndarray, *, gamma: float | None = None) -> float:
+def mmd_rbf(
+    source: np.ndarray,
+    target: np.ndarray,
+    *,
+    gamma: float | None = None,
+    max_samples: int | None = 2048,
+) -> float:
     source = _as_2d(source)
     target = _as_2d(target)
     if source.shape[1] != target.shape[1]:
         raise ValueError("source and target must have the same feature dimension")
+    source = _cap_rows(source, max_samples)
+    target = _cap_rows(target, max_samples)
     if gamma is None:
         gamma = 1.0 / max(1, source.shape[1])
     k_xx = _rbf_kernel(source, source, gamma).mean()
@@ -65,6 +73,15 @@ def _rbf_kernel(a: np.ndarray, b: np.ndarray, gamma: float) -> np.ndarray:
     b2 = np.sum(b * b, axis=1, keepdims=True).T
     dist = np.maximum(a2 + b2 - 2 * a @ b.T, 0.0)
     return np.exp(-gamma * dist)
+
+
+def _cap_rows(array: np.ndarray, max_samples: int | None) -> np.ndarray:
+    if max_samples is None or array.shape[0] <= max_samples:
+        return array
+    if max_samples < 2:
+        raise ValueError("max_samples must be at least 2")
+    indices = np.linspace(0, array.shape[0] - 1, num=max_samples, dtype=int)
+    return array[indices]
 
 
 def _as_2d(array: np.ndarray) -> np.ndarray:

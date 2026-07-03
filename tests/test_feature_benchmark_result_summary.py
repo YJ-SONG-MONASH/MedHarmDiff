@@ -102,3 +102,31 @@ def test_summarize_feature_benchmark_result_writes_summary_files(tmp_path) -> No
     assert summary["uses_target_labels_any"] is False
     assert summary["paper_safe_split"] is True
     assert (result_dir / "result_triage_summary.md").exists()
+
+
+def test_summarizer_requires_margin_to_count_diffusion_as_beating_ridge(tmp_path) -> None:
+    result_dir = tmp_path / "near_tie_result"
+    _write_fake_result_dir(result_dir)
+    metrics = pd.read_csv(result_dir / "metrics_by_method.csv")
+    metrics.loc[metrics["method"] == "ridge_denoising", "target_auc"] = 0.8729
+    metrics.loc[metrics["method"] == "latent_diffusion_v0", "target_auc"] = 0.8769
+    metrics.to_csv(result_dir / "metrics_by_method.csv", index=False)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/summarize_feature_benchmark_result.py",
+            "--result-dir",
+            str(result_dir),
+            "--write-summary",
+        ],
+        check=True,
+        cwd=".",
+        capture_output=True,
+        text=True,
+    )
+
+    summary = json.loads((result_dir / "result_triage_summary.json").read_text("utf-8"))
+    assert "diffusion_beats_learned_denoising: False" in completed.stdout
+    assert summary["diffusion_beats_learned_denoising"] is False
+    assert summary["target_margin_required"] == 0.01

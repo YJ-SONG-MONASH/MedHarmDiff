@@ -10,6 +10,9 @@ import numpy as np
 import pandas as pd
 
 
+TARGET_MARGIN_REQUIRED = 0.01
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Summarize a feature benchmark result directory without raw data."
@@ -72,8 +75,17 @@ def summarize_result_dir(result_dir: Path) -> dict[str, object]:
         "best_statistical": best_statistical,
         "best_learned_denoising": best_learned,
         "best_latent_diffusion_v0": best_diffusion,
-        "diffusion_beats_statistical": _beats(diffusion_target, statistical_target),
-        "diffusion_beats_learned_denoising": _beats(diffusion_target, learned_target),
+        "target_margin_required": TARGET_MARGIN_REQUIRED,
+        "diffusion_beats_statistical": _beats(
+            diffusion_target,
+            statistical_target,
+            margin=TARGET_MARGIN_REQUIRED,
+        ),
+        "diffusion_beats_learned_denoising": _beats(
+            diffusion_target,
+            learned_target,
+            margin=TARGET_MARGIN_REQUIRED,
+        ),
         "claim_gate_status": claim_gate.get("status"),
         "claim_gate_reason": claim_gate.get("reason"),
         "paper_safe_split": bool(run_config.get("paper_safe_split", False)),
@@ -104,6 +116,7 @@ def render_console_summary(summary: dict[str, object]) -> str:
         f"best_statistical: {best_statistical.get('method', 'none')}",
         f"best_learned_denoising: {best_learned.get('method', 'none')}",
         f"best_latent_diffusion_v0: {best_diffusion.get('method', 'none')}",
+        f"target_margin_required: {summary['target_margin_required']}",
         f"diffusion_beats_statistical: {summary['diffusion_beats_statistical']}",
         "diffusion_beats_learned_denoising: "
         f"{summary['diffusion_beats_learned_denoising']}",
@@ -128,6 +141,7 @@ def render_markdown_summary(summary: dict[str, object]) -> str:
             f"- Best statistical baseline: `{best_statistical.get('method', 'none')}`",
             f"- Best learned denoising baseline: `{best_learned.get('method', 'none')}`",
             f"- Best latent diffusion v0 method: `{best_diffusion.get('method', 'none')}`",
+            f"- Target margin required: `{summary['target_margin_required']}`",
             f"- Diffusion beats statistical: `{summary['diffusion_beats_statistical']}`",
             "- Diffusion beats learned denoising: "
             f"`{summary['diffusion_beats_learned_denoising']}`",
@@ -162,8 +176,8 @@ def _row_metric(row: dict[str, object] | None, metric: str) -> float | None:
     return float(row[metric])
 
 
-def _beats(left: float | None, right: float | None) -> bool:
-    return bool(left is not None and right is not None and left > right)
+def _beats(left: float | None, right: float | None, *, margin: float) -> bool:
+    return bool(left is not None and right is not None and left >= right + margin)
 
 
 def _uses_target_labels(metrics: pd.DataFrame) -> bool:
@@ -189,9 +203,9 @@ def _recommendation(
         return "pause diffusion: no runnable latent diffusion v0 row"
     if (
         statistical_target is not None
-        and diffusion_target <= statistical_target
+        and diffusion_target < statistical_target + TARGET_MARGIN_REQUIRED
         or learned_target is not None
-        and diffusion_target <= learned_target
+        and diffusion_target < learned_target + TARGET_MARGIN_REQUIRED
     ):
         return "pause diffusion: ridge/statistical baselines still dominate"
     if claim_gate_status != "diffusion_contribution_established":

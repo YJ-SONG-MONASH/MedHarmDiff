@@ -1,11 +1,13 @@
 import json
 import subprocess
 import sys
+from time import perf_counter
 
 import pandas as pd
 
 from medharmdiff.io import load_feature_csv
 from medharmdiff.real_pilots.camelyon17_wilds import (
+    Camelyon17MetadataRow,
     build_camelyon17_feature_csv_rows,
     normalize_camelyon17_metadata_row,
     validate_camelyon17_rows,
@@ -65,6 +67,27 @@ def test_camelyon17_validation_reports_grouping_warning_and_prevalence() -> None
     assert summary["split_counts"] == {"test": 1, "train": 2}
     assert summary["has_patient_or_group_id"] is False
     assert "patient_or_group_id is missing" in " ".join(summary["warnings"])
+
+
+def test_camelyon17_validation_scales_to_real_metadata_size() -> None:
+    rows = [
+        Camelyon17MetadataRow(
+            sample_id=f"s{index}",
+            center_id=str(index % 5),
+            label=index % 2,
+            patient_or_group_id=f"slide_{index % 50}",
+            split_group="train",
+        )
+        for index in range(20_000)
+    ]
+
+    start = perf_counter()
+    summary = validate_camelyon17_rows(rows)
+    elapsed = perf_counter() - start
+
+    assert summary["sample_count"] == 20_000
+    assert summary["has_patient_or_group_id"] is True
+    assert elapsed < 1.0
 
 
 def test_camelyon17_feature_rows_use_feature_prefix_only() -> None:

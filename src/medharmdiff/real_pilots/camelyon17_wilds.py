@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -64,7 +65,9 @@ def validate_camelyon17_rows(rows: Sequence[Camelyon17MetadataRow]) -> dict[str,
     sample_ids = [row.sample_id for row in rows]
     centers = [row.center_id for row in rows]
     warnings = []
-    duplicated = sorted({sample_id for sample_id in sample_ids if sample_ids.count(sample_id) > 1})
+    duplicated = sorted(
+        sample_id for sample_id, count in Counter(sample_ids).items() if count > 1
+    )
     if duplicated:
         warnings.append(f"duplicate sample_id values: {duplicated}")
     if not rows:
