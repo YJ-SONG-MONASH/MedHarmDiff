@@ -56,6 +56,7 @@ def convert_embeddings_to_feature_csv(
     metadata_rows = normalize_camelyon17_metadata_frame(metadata_df)
     metadata_validation = validate_camelyon17_rows(metadata_rows)
     embeddings_by_sample_id = load_embeddings(embeddings_file)
+    embedding_metadata = load_embedding_metadata(embeddings_file)
     write_summary = write_camelyon17_feature_csv(
         metadata_rows,
         embeddings_by_sample_id,
@@ -66,6 +67,7 @@ def convert_embeddings_to_feature_csv(
         "metadata_csv": str(metadata_csv),
         "embeddings_file": str(embeddings_file),
         "output_csv": str(output_csv),
+        "embedding_metadata": embedding_metadata,
         "metadata_validation": metadata_validation,
         "write_summary": write_summary,
         "contract_validation": contract_validation,
@@ -78,6 +80,48 @@ def load_embeddings(embeddings_file: Path) -> dict[str, np.ndarray]:
         return _load_csv_embeddings(embeddings_file)
     if suffix == ".npz":
         return _load_npz_embeddings(embeddings_file)
+    raise ValueError("Supported embedding formats are CSV and NPZ")
+
+
+def load_embedding_metadata(embeddings_file: Path) -> dict[str, object]:
+    suffix = embeddings_file.suffix.lower()
+    if suffix == ".csv":
+        df = pd.read_csv(embeddings_file, nrows=1)
+        embedding_columns = [
+            column
+            for column in df.columns
+            if column != "sample_id" and pd.api.types.is_numeric_dtype(df[column])
+        ]
+        return {
+            "embeddings_file": str(embeddings_file),
+            "format": "csv",
+            "extractor_name": None,
+            "feature_dim": len(embedding_columns),
+            "feature_names": [str(column) for column in embedding_columns],
+        }
+    if suffix == ".npz":
+        data = np.load(embeddings_file, allow_pickle=False)
+        extractor = None
+        if "extractor" in data:
+            extractor_values = data["extractor"].astype(str).reshape(-1).tolist()
+            extractor = extractor_values[0] if extractor_values else None
+        feature_names = (
+            data["feature_names"].astype(str).tolist()
+            if "feature_names" in data
+            else []
+        )
+        feature_dim = (
+            int(np.asarray(data["embeddings"]).shape[1])
+            if "embeddings" in data and np.asarray(data["embeddings"]).ndim == 2
+            else len(feature_names)
+        )
+        return {
+            "embeddings_file": str(embeddings_file),
+            "format": "npz",
+            "extractor_name": extractor,
+            "feature_dim": feature_dim,
+            "feature_names": feature_names,
+        }
     raise ValueError("Supported embedding formats are CSV and NPZ")
 
 
@@ -127,6 +171,7 @@ def render_conversion_report(summary: dict[str, object]) -> str:
             f"- Sample count: `{contract['sample_count']}`",
             f"- Center count: `{contract['center_count']}`",
             f"- Feature count: `{contract['feature_count']}`",
+            f"- Embedding metadata: `{summary['embedding_metadata']}`",
             f"- Metadata warnings: `{metadata['warnings']}`",
             f"- Contract warnings: `{contract['warnings']}`",
             "",

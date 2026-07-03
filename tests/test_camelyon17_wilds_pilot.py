@@ -205,6 +205,9 @@ def test_converter_script_writes_feature_csv_for_fake_embeddings(tmp_path) -> No
         "feature_0",
         "feature_1",
     ]
+    assert summary["embedding_metadata"]["format"] == "csv"
+    assert summary["embedding_metadata"]["feature_dim"] == 2
+    assert summary["embedding_metadata"]["feature_names"] == ["embedding_0", "embedding_1"]
     assert summary["contract_validation"]["sample_count"] == 3
     assert summary["contract_validation"]["feature_count"] == 2
     x, _, _, _, feature_columns = load_feature_csv(output_csv)
