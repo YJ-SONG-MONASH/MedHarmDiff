@@ -91,6 +91,27 @@ def test_latent_diffusion_num_steps_affects_finite_transform_path() -> None:
     assert not np.allclose(short_out, long_out)
 
 
+def test_latent_diffusion_caps_training_pairs_without_float64_expansion() -> None:
+    canonical_x = np.arange(80, dtype=np.float32).reshape(20, 4)
+    harmonizer = TimeConditionedRidgeDiffusionHarmonizer(
+        n_augments=5,
+        max_training_pairs=17,
+        random_seed=29,
+    )
+    harmonizer.feature_scale_ = np.ones(4, dtype=np.float32)
+    harmonizer.site_offsets_ = {
+        "A": np.zeros(4, dtype=np.float32),
+        "B": np.ones(4, dtype=np.float32),
+    }
+
+    train_x, train_y = harmonizer._diffusion_training_pairs(canonical_x)
+
+    assert train_x.shape == (17, 9)
+    assert train_y.shape == (17, 4)
+    assert train_x.dtype == np.float32
+    assert train_y.dtype == np.float32
+
+
 def test_clinical_preserving_latent_diffusion_preserves_shape() -> None:
     x, site, y, target_x, target_site = _toy_features()
     harmonizer = ClinicalPreservingTimeConditionedRidgeDiffusionHarmonizer(

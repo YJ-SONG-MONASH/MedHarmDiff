@@ -21,6 +21,7 @@ class TimeConditionedRidgeDiffusionHarmonizer:
     alpha: float = 1.0
     clinical_preservation_strength: float = 0.0
     random_seed: int = 13
+    max_training_pairs: int | None = 100_000
     is_fitted: bool = False
     uses_target_unlabeled: bool = False
     uses_target_labels: bool = False
@@ -40,7 +41,7 @@ class TimeConditionedRidgeDiffusionHarmonizer:
         target_site: np.ndarray | None = None,
     ) -> "TimeConditionedRidgeDiffusionHarmonizer":
         del target_x, target_site
-        source_x = np.asarray(x, dtype=float)
+        source_x = np.asarray(x, dtype=np.float32)
         source_site = np.asarray(site).astype(str)
         if source_x.ndim != 2:
             raise ValueError("x must be a 2D feature matrix")
@@ -50,11 +51,19 @@ class TimeConditionedRidgeDiffusionHarmonizer:
             raise ValueError("num_steps must be at least 1")
         if self.n_augments < 1:
             raise ValueError("n_augments must be at least 1")
+        if self.max_training_pairs is not None and self.max_training_pairs < 1:
+            raise ValueError("max_training_pairs must be positive when set")
 
-        self.global_mean_ = source_x.mean(axis=0)
-        self.feature_scale_ = np.where(source_x.std(axis=0) == 0, 1.0, source_x.std(axis=0))
+        self.global_mean_ = source_x.mean(axis=0).astype(np.float32, copy=False)
+        feature_std = source_x.std(axis=0).astype(np.float32, copy=False)
+        self.feature_scale_ = np.where(feature_std == 0, 1.0, feature_std).astype(
+            np.float32,
+            copy=False,
+        )
         self.site_offsets_ = {
-            site_id: source_x[source_site == site_id].mean(axis=0) - self.global_mean_
+            site_id: (
+                source_x[source_site == site_id].mean(axis=0) - self.global_mean_
+            ).astype(np.float32, copy=False)
             for site_id in sorted(set(source_site.tolist()))
         }
         canonical_x = self._canonicalize_source(source_x, source_site)
@@ -68,7 +77,7 @@ class TimeConditionedRidgeDiffusionHarmonizer:
     def transform(self, x: np.ndarray, site: np.ndarray | None = None) -> np.ndarray:
         if not self.is_fitted or self.model_ is None:
             raise RuntimeError("fit must be called before transform")
-        current = np.asarray(x, dtype=float).copy()
+        current = np.asarray(x, dtype=np.float32).copy()
         original = current.copy()
         site_offsets = self._offsets_for(site, current)
         for step in range(self.num_steps, 0, -1):
@@ -76,7 +85,7 @@ class TimeConditionedRidgeDiffusionHarmonizer:
             predicted_clean = self.model_.predict(
                 self._design_matrix(
                     current,
-                    np.full(current.shape[0], t_value, dtype=float),
+                    np.full(current.shape[0], t_value, dtype=np.float32),
                     site_offsets,
                 )
             )
@@ -93,20 +102,52 @@ class TimeConditionedRidgeDiffusionHarmonizer:
     def _diffusion_training_pairs(self, canonical_x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         if self.feature_scale_ is None:
             raise RuntimeError("fit must be called before creating training pairs")
+        canonical_x = np.asarray(canonical_x, dtype=np.float32)
         rng = np.random.default_rng(self.random_seed)
-        offsets = list(self.site_offsets_.values()) or [np.zeros(canonical_x.shape[1])]
-        train_inputs = []
-        train_targets = []
-        for _ in range(self.n_augments):
-            t_values = rng.uniform(0.0, 1.0, size=canonical_x.shape[0])
-            offset_indices = rng.integers(0, len(offsets), size=canonical_x.shape[0])
-            sampled_offsets = np.vstack([offsets[idx] for idx in offset_indices])
+        offsets = list(self.site_offsets_.values()) or [
+            np.zeros(canonical_x.shape[1], dtype=np.float32)
+        ]
+        offset_matrix = np.asarray(offsets, dtype=np.float32)
+        total_pairs = canonical_x.shape[0] * self.n_augments
+        pair_count = (
+            total_pairs
+            if self.max_training_pairs is None
+            else min(total_pairs, self.max_training_pairs)
+        )
+        counts = _pairs_per_augment(pair_count, self.n_augments)
+        train_inputs = np.empty(
+            (pair_count, canonical_x.shape[1] * 2 + 1),
+            dtype=np.float32,
+        )
+        train_targets = np.empty((pair_count, canonical_x.shape[1]), dtype=np.float32)
+        cursor = 0
+        for count in counts:
+            if count == 0:
+                continue
+            base_indices = (
+                np.arange(canonical_x.shape[0])
+                if count == canonical_x.shape[0]
+                else rng.integers(0, canonical_x.shape[0], size=count)
+            )
+            base_x = canonical_x[base_indices]
+            t_values = rng.uniform(0.0, 1.0, size=count).astype(np.float32, copy=False)
+            offset_indices = rng.integers(0, len(offset_matrix), size=count)
+            sampled_offsets = offset_matrix[offset_indices]
             sigma = self.noise_strength * np.maximum(t_values[:, None], 1e-3)
-            noise = rng.normal(scale=sigma * self.feature_scale_, size=canonical_x.shape)
-            noisy_shifted = canonical_x + sampled_offsets * t_values[:, None] + noise
-            train_inputs.append(self._design_matrix(noisy_shifted, t_values, sampled_offsets))
-            train_targets.append(canonical_x)
-        return np.vstack(train_inputs), np.vstack(train_targets)
+            noise = rng.normal(
+                scale=sigma * np.asarray(self.feature_scale_, dtype=np.float32),
+                size=base_x.shape,
+            ).astype(np.float32, copy=False)
+            noisy_shifted = base_x + sampled_offsets * t_values[:, None] + noise
+            next_cursor = cursor + count
+            train_inputs[cursor:next_cursor] = self._design_matrix(
+                noisy_shifted,
+                t_values,
+                sampled_offsets,
+            )
+            train_targets[cursor:next_cursor] = base_x
+            cursor = next_cursor
+        return train_inputs, train_targets
 
     def _design_matrix(
         self,
@@ -114,7 +155,14 @@ class TimeConditionedRidgeDiffusionHarmonizer:
         t_values: np.ndarray,
         offsets: np.ndarray,
     ) -> np.ndarray:
-        return np.hstack([x, t_values.reshape(-1, 1), offsets])
+        dtype = np.asarray(x).dtype
+        return np.hstack(
+            [
+                np.asarray(x, dtype=dtype),
+                np.asarray(t_values, dtype=dtype).reshape(-1, 1),
+                np.asarray(offsets, dtype=dtype),
+            ]
+        ).astype(dtype, copy=False)
 
     def _offsets_for(self, site: np.ndarray | None, x: np.ndarray) -> np.ndarray:
         if site is None:
@@ -149,6 +197,12 @@ class TimeConditionedRidgeDiffusionHarmonizer:
         delta = original - denoised
         projection = delta @ self.clinical_direction_
         return denoised + strength * np.outer(projection, self.clinical_direction_)
+
+
+def _pairs_per_augment(pair_count: int, n_augments: int) -> list[int]:
+    base = pair_count // n_augments
+    remainder = pair_count % n_augments
+    return [base + (1 if index < remainder else 0) for index in range(n_augments)]
 
 
 @dataclass
